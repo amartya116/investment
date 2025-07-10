@@ -5,23 +5,34 @@ from models import Base, RawStockData, Company, StreakStatistic, LongStreak
 import pandas as pd
 from datetime import datetime
 from db_config import DBConfig
+import numpy as np
 
 class DatabaseManager:
     def __init__(self, config: DBConfig):
         self.engine = create_engine(
-            f'postgresql://{config.user}:{config.password}@{config.host}:{config.port}/{config.database}'
+            "postgresql+psycopg2://postgres:amartya@localhost:5432/stock_analysis"
         )
         self.Session = sessionmaker(bind=self.engine)
-        
+
+    def _convert_numpy_types(self, data: dict) -> dict:
+        """Convert NumPy data types to native Python types"""
+        return {
+            k: (
+                float(v) if isinstance(v, np.floating)
+                else int(v) if isinstance(v, np.integer)
+                else v
+            )
+            for k, v in data.items()
+        }
+
     def create_tables(self):
         """Create all tables in the database"""
         Base.metadata.create_all(self.engine)
-        
+
     def save_raw_stock_data(self, ticker: str, df: pd.DataFrame):
         """Save raw stock data to database"""
         session = self.Session()
         try:
-            # Convert DataFrame to list of dictionaries
             records = []
             for date, row in df.iterrows():
                 record = {
@@ -34,8 +45,7 @@ class DatabaseManager:
                     'volume': int(row['Volume'])
                 }
                 records.append(record)
-            
-            # Use PostgreSQL's INSERT ... ON CONFLICT DO UPDATE
+
             stmt = insert(RawStockData).values(records)
             stmt = stmt.on_conflict_do_update(
                 constraint='uix_ticker_date',
@@ -47,7 +57,7 @@ class DatabaseManager:
                     'volume': stmt.excluded.volume
                 }
             )
-            
+
             session.execute(stmt)
             session.commit()
         finally:
@@ -68,7 +78,7 @@ class DatabaseManager:
                 RawStockData.ticker == ticker,
                 RawStockData.date.between(start_date, end_date)
             ).order_by(RawStockData.date)
-            
+
             df = pd.read_sql(query.statement, session.bind, index_col='date')
             return df
         finally:
@@ -78,22 +88,24 @@ class DatabaseManager:
         """Save streak statistics to database"""
         session = self.Session()
         try:
+            clean_stats = self._convert_numpy_types(stats)
+
             stmt = insert(StreakStatistic).values(
                 ticker=ticker,
                 analysis_date=analysis_date,
                 timeframe_months=timeframe_months,
-                max_up_streak=stats['max_up_streak'],
-                max_down_streak=stats['max_down_streak'],
-                max_up_change=stats['max_up_change'],
-                max_down_change=stats['max_down_change'],
-                max_up_change_pct=stats['max_up_change_pct'],
-                max_down_change_pct=stats['max_down_change_pct'],
-                avg_up_change=stats['avg_up_change'],
-                avg_down_change=stats['avg_down_change'],
-                avg_up_change_pct=stats['avg_up_change_pct'],
-                avg_down_change_pct=stats['avg_down_change_pct']
+                max_up_streak=clean_stats['max_up_streak'],
+                max_down_streak=clean_stats['max_down_streak'],
+                max_up_change=clean_stats['max_up_change'],
+                max_down_change=clean_stats['max_down_change'],
+                max_up_change_pct=clean_stats['max_up_change_pct'],
+                max_down_change_pct=clean_stats['max_down_change_pct'],
+                avg_up_change=clean_stats['avg_up_change'],
+                avg_down_change=clean_stats['avg_down_change'],
+                avg_up_change_pct=clean_stats['avg_up_change_pct'],
+                avg_down_change_pct=clean_stats['avg_down_change_pct']
             )
-            
+
             stmt = stmt.on_conflict_do_update(
                 constraint='streak_statistics_ticker_analysis_date_timeframe_months_key',
                 set_={
@@ -109,7 +121,7 @@ class DatabaseManager:
                     'avg_down_change_pct': stmt.excluded.avg_down_change_pct
                 }
             )
-            
+
             session.execute(stmt)
             session.commit()
         finally:
@@ -121,7 +133,7 @@ class DatabaseManager:
         try:
             records = []
             for streak in streaks:
-                record = {
+                record = self._convert_numpy_types({
                     'ticker': ticker,
                     'streak_type': streak['type'],
                     'start_date': streak['start_date'],
@@ -131,9 +143,9 @@ class DatabaseManager:
                     'total_change_pct': streak['change_pct'],
                     'next_day_change': streak['next_day_change'],
                     'next_day_change_pct': streak['next_day_change_pct']
-                }
+                })
                 records.append(record)
-            
+
             stmt = insert(LongStreak).values(records)
             stmt = stmt.on_conflict_do_update(
                 constraint='long_streaks_ticker_start_date_streak_type_key',
@@ -146,39 +158,28 @@ class DatabaseManager:
                     'next_day_change_pct': stmt.excluded.next_day_change_pct
                 }
             )
-            
+
             session.execute(stmt)
             session.commit()
         finally:
             session.close()
 
     def save_company_info(self, ticker: str, company_data: dict):
-        """Save or update company information
-        
-        Parameters:
-        -----------
-        ticker : str
-            Stock ticker symbol
-        company_data : dict
-            Dictionary containing company information with keys:
-            - name
-            - exchange
-            - sector
-            - industry
-            - market_cap
-        """
+        """Save or update company information"""
         session = self.Session()
         try:
+            clean_data = self._convert_numpy_types(company_data)
+
             stmt = insert(Company).values(
                 ticker=ticker,
-                name=company_data.get('name'),
-                exchange=company_data.get('exchange'),
-                sector=company_data.get('sector'),
-                industry=company_data.get('industry'),
-                market_cap=company_data.get('market_cap'),
+                name=clean_data.get('name'),
+                exchange=clean_data.get('exchange'),
+                sector=clean_data.get('sector'),
+                industry=clean_data.get('industry'),
+                market_cap=clean_data.get('market_cap'),
                 last_updated=datetime.utcnow()
             )
-            
+
             stmt = stmt.on_conflict_do_update(
                 constraint='companies_ticker_key',
                 set_={
@@ -190,8 +191,8 @@ class DatabaseManager:
                     'last_updated': stmt.excluded.last_updated
                 }
             )
-            
+
             session.execute(stmt)
             session.commit()
         finally:
-            session.close() 
+            session.close()
