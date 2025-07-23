@@ -7,7 +7,9 @@ This module provides the core simulation engine that:
 3. Handles event processing and scheduling
 4. Collects and records simulation results
 """
-
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 from decimal import Decimal

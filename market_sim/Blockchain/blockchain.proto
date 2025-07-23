@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package blockchain;
+
+message Block {
+  int32 index = 1;
+  string timestamp = 2;
+  int32 proof = 3;
+  string previous_hash = 4;
+  string transactions = 5; // JSON string of transactions
+}
+
+message Empty {}
+
+service Blockchain {
+  rpc ReceiveBlock(Block) returns (Empty);
+}

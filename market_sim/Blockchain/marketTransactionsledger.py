@@ -1,3 +1,5 @@
+# marketTransactionsledger.py
+
 import hashlib
 import json
 import time
@@ -10,7 +12,107 @@ import requests
 from uuid import uuid4
 from threading import Lock
 from collections import Counter
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from datetime import datetime
+from fastapi.responses import JSONResponse
 
+# Database setup
+DATABASE_URL = "postgresql://postgres:amartya@localhost:5432/stock_analysis"
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# SQLAlchemy Base
+Base = declarative_base()
+
+# Define the TradeDB model
+class TradeDB(Base):
+    __tablename__ = "trades"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String, index=True)
+    price = Column(Float)
+    quantity = Column(Integer)
+    buyer_order_id = Column(String)
+    seller_order_id = Column(String)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
+# Create tables
+Base.metadata.create_all(bind=engine)
+
+def get_db_session():
+    """Create a new database session"""
+    return SessionLocal()
+
+def save_trades_to_db(transactions: List[dict]):
+    """Save trades to database with proper session management"""
+    if not transactions:
+        return
+        
+    db = get_db_session()
+    try:
+        for tx in transactions:
+            try:
+                trade = TradeDB(
+                    symbol=tx["symbol"],
+                    price=tx["price"],
+                    quantity=tx["quantity"],
+                    buyer_order_id=tx["buyer_order_id"],
+                    seller_order_id=tx["seller_order_id"]
+                )
+                db.add(trade)
+                print(f"Adding trade to DB: {tx['symbol']} - {tx['quantity']} @ {tx['price']}")
+            except Exception as e:
+                print(f"Failed to create trade object: {e}")
+        
+        db.commit()
+        print(f"Successfully saved {len(transactions)} trades to database")
+        
+    except Exception as e:
+        print(f"Failed to save trades to database: {e}")
+        db.rollback()
+    finally:
+        db.close()
+def mine_block_and_process():
+    print("Mining started...")
+    proof = blockchain.proof_of_work(blockchain.last_block['proof'])
+    block = blockchain.new_block(proof)
+
+    print(f"Block mined with {len(block['transactions'])} transactions")
+
+    if block['transactions']:
+        print(f"Saving {len(block['transactions'])} transactions from mined block to database")
+        save_trades_to_db(block['transactions'])
+    else:
+        print("No transactions in mined block to save to database")
+
+    # Force-send the new block to all peers
+    broadcast_results = force_push_block_to_peers(block)
+
+    return {
+        "block": block,
+        "broadcast_results": broadcast_results,
+        "transactions_saved": len(block['transactions']),
+        "message": f"Block mined, saved to DB, and forcefully synced to {broadcast_results['successful']} peers"
+    }
+def force_push_block_to_peers(block):
+    results = {"successful": 0, "failed": 0, "errors": []}
+    print(PEERS)
+    for peer in PEERS:
+        try:
+            print(f"Pushing block to {peer}/blocks/receive")
+            res = requests.post(f"{peer}/blocks/receive", json=block, timeout=5)
+            if res.status_code == 200:
+                results["successful"] += 1
+            else:
+                results["failed"] += 1
+                results["errors"].append(f"{peer}: {res.status_code} {res.text}")
+        except Exception as e:
+            results["failed"] += 1
+            results["errors"].append(f"{peer}: {str(e)}")
+    
+    return results
 # Blockchain logic
 class Blockchain:
     def __init__(self):
@@ -20,36 +122,80 @@ class Blockchain:
         # Create genesis block
         self.new_block(proof=100, previous_hash='1')
 
-    def new_block(self, proof: int, previous_hash: Optional[str] = None) -> dict:
-        with self.lock:
-            block = {
-                'index': len(self.chain) + 1,
-                'timestamp': time.time(),
-                'transactions': list(self.current_transactions),
-                'proof': proof,
-                'previous_hash': previous_hash or self.hash(self.chain[-1]),
-            }
-            self.current_transactions.clear()
-            self.chain.append(block)
-            return block
+   
+    def new_transaction(self, symbol, price, quantity, buyer_order_id, seller_order_id):
+        self.current_transactions.append({
+            'symbol': symbol,
+            'price': str(price),
+            'quantity': str(quantity),
+            'buyer_order_id': buyer_order_id,
+            'seller_order_id': seller_order_id
+        })
+        return self.last_block['index'] + 1
 
-    def new_transaction(self, account_number: str, stock_symbol: str, transaction_type: str,
-                        share_quantity: int, price_per_share: float, commission_fee: float,
-                        total_cost: float, net_amount: float, trade_date: str, settlement_date: str) -> int:
+    def new_block(self, proof, previous_hash=None):
+        block = {
+            'index': len(self.chain) + 1,
+            'timestamp': str(datetime.utcnow()),
+            'transactions': self.current_transactions,  # 💡 Important
+            'proof': proof,
+            'previous_hash': previous_hash or self.hash(self.chain[-1]),
+        }
+        self.current_transactions = []  # Reset the transaction pool
+        self.chain.append(block)
+        return block
+
+    def add_block(self, block: dict) -> bool:
+        """Add a received block to the chain if valid"""
         with self.lock:
-            self.current_transactions.append({
-                'account': account_number,
-                'stock_symbol': stock_symbol,
-                'transaction_type': transaction_type,
-                'quantity': share_quantity,
-                'price_per_share': price_per_share,
-                'commission': commission_fee,
-                'total_cost': total_cost,
-                'net_amount': net_amount,
-                'trade_date': trade_date,
-                'settlement_date': settlement_date
-            })
-            return self.last_block['index'] + 1
+            # Validate the block
+            if not self.is_valid_block(block):
+                print(f"Block {block.get('index')} failed validation and was not added.")
+                return False
+                
+            # Add the block
+            self.chain.append(block)
+            
+            # Remove any pending transactions that are now in the block
+            block_transactions = block.get('transactions', [])
+            for block_tx in block_transactions:
+                # Remove matching transactions from pending
+                self.current_transactions = [
+                    tx for tx in self.current_transactions 
+                    if not self.transactions_match(tx, block_tx)
+                ]
+            
+            return True
+
+    def is_valid_block(self, block: dict) -> bool:
+        last_block = self.last_block
+
+        # 1. Index check
+        expected_index = last_block['index'] + 1
+        if block['index'] != expected_index:
+            print(f"Invalid index: expected {expected_index}, got {block['index']}")
+            return False
+
+        # 2. Previous hash check
+        expected_prev = self.hash(last_block)
+        if block['previous_hash'] != expected_prev:
+            print(f"Invalid previous_hash: expected {expected_prev}, got {block['previous_hash']}")
+            return False
+
+        # 3. Proof of work check
+        if not self.valid_proof(last_block['proof'], block['proof']):
+            print(f"Invalid proof: block proof {block['proof']} does not satisfy proof-of-work for last proof {last_block['proof']}")
+            return False
+
+        return True
+
+    def transactions_match(self, tx1: dict, tx2: dict) -> bool:
+        """Check if two transactions are the same"""
+        return (tx1.get('symbol') == tx2.get('symbol') and
+                tx1.get('price') == tx2.get('price') and
+                tx1.get('quantity') == tx2.get('quantity') and
+                tx1.get('buyer_order_id') == tx2.get('buyer_order_id') and
+                tx1.get('seller_order_id') == tx2.get('seller_order_id'))
 
     @staticmethod
     def hash(block: dict) -> str:
@@ -89,39 +235,145 @@ NODE_ID = str(uuid4()).replace('-', '')
 
 # Pydantic model for transactions
 class Transaction(BaseModel):
-    account_number: str
-    stock_symbol: str
-    transaction_type: str
-    share_quantity: int
-    price_per_share: float
-    commission_fee: float
-    total_cost: float
-    net_amount: float
-    trade_date: str
-    settlement_date: str
+    symbol: str
+    price: float
+    quantity: int
+    buyer_order_id: str
+    seller_order_id: str
+
+# Pydantic model for blocks
+class Block(BaseModel):
+    index: int
+    timestamp: float
+    transactions: List[dict]
+    proof: int
+    previous_hash: str
+
+# Pydantic model for peer registration
+class PeerNode(BaseModel):
+    address: str
+
+def broadcast_block_to_peers(block: dict):
+    """Broadcast a newly mined block to all peers"""
+    print(f"Starting broadcast to {len(PEERS)} peers: {list(PEERS)}")
+    
+    if not PEERS:
+        print("No peers to broadcast to")
+        return {"successful": 0, "failed": 0}
+    
+    successful_broadcasts = 0
+    failed_broadcasts = 0
+    print(PEERS)
+    for peer in PEERS:
+        try:
+            print(f"Attempting to broadcast to peer: {peer}")
+            response = requests.post(
+                f"{peer}/blocks/receive",
+                json=block,
+                timeout=5
+            )
+            if response.status_code == 200:
+                successful_broadcasts += 1
+                print(f"✓ Successfully broadcast block to {peer}")
+            else:
+                failed_broadcasts += 1
+                print(f"✗ Failed to broadcast block to {peer}: HTTP {response.status_code}")
+                print(f"Response: {response.text}")
+        except requests.exceptions.ConnectionError as e:
+            failed_broadcasts += 1
+            print(f"✗ Connection error broadcasting to {peer}: {str(e)}")
+        except requests.exceptions.Timeout as e:
+            failed_broadcasts += 1
+            print(f"✗ Timeout error broadcasting to {peer}: {str(e)}")
+        except Exception as e:
+            failed_broadcasts += 1
+            print(f"✗ Unknown error broadcasting to {peer}: {str(e)}")
+    
+    print(f"Broadcast complete: {successful_broadcasts} successful, {failed_broadcasts} failed")
+    return {"successful": successful_broadcasts, "failed": failed_broadcasts}
 
 @app.post("/transactions/new")
 def add_transaction(tx: Transaction):
     idx = blockchain.new_transaction(
-        tx.account_number, tx.stock_symbol, tx.transaction_type,
-        tx.share_quantity, tx.price_per_share, tx.commission_fee,
-        tx.total_cost, tx.net_amount, tx.trade_date, tx.settlement_date
+        tx.symbol, tx.price, tx.quantity, 
+        tx.buyer_order_id, tx.seller_order_id
     )
     return {"message": f"Transaction will be added to block {idx}"}
 
 @app.get("/mine")
 def mine():
-    proof = blockchain.proof_of_work(blockchain.last_block['proof'])
-    block = blockchain.new_block(proof)
-    return block
+    return mine_block_and_process()
+
+@app.post("/blocks/receive")
+def receive_block(block: dict):
+    """
+    Force-replace or append the incoming block:
+      - If a block at this index already exists, overwrite it.
+      - Otherwise, append it.
+    """
+    idx = block.get("index", len(blockchain.chain) + 1)
+    # 1) Ensure the chain list is big enough
+    if idx <= len(blockchain.chain):
+        # overwrite existing
+        blockchain.chain[idx - 1] = block
+    else:
+        # append new
+        blockchain.chain.append(block)
+
+    # 2) Persist its transactions
+    if block.get("transactions"):
+        save_trades_to_db(block["transactions"])
+
+    return {"message": f"Block {idx} replaced/appended successfully"}
+
 
 @app.get("/chain")
-def get_chain():
-    return {"chain": blockchain.chain, "length": len(blockchain.chain)}
+def full_chain():
+    response = {
+        'chain': blockchain.chain,
+        'length': len(blockchain.chain),
+    }
+    return response
+
+@app.post("/nodes/register")
+def register_peer(peer: PeerNode):
+    """Register a new peer node"""
+    if peer.address in PEERS:
+        return {"message": f"Peer {peer.address} already registered", "total_peers": len(PEERS)}
+    
+    PEERS.add(peer.address)
+    print(f"Registered new peer: {peer.address}")
+    return {"message": f"Peer {peer.address} registered successfully", "total_peers": len(PEERS)}
+
+@app.delete("/nodes/register/{peer_address}")
+def unregister_peer(peer_address: str):
+    """Unregister a peer node"""
+    # URL decode the peer address
+    import urllib.parse
+    decoded_address = urllib.parse.unquote(peer_address)
+    
+    if decoded_address in PEERS:
+        PEERS.remove(decoded_address)
+        print(f"Unregistered peer: {decoded_address}")
+        return {"message": f"Peer {decoded_address} unregistered successfully", "total_peers": len(PEERS)}
+    else:
+        return {"message": f"Peer {decoded_address} not found", "total_peers": len(PEERS)}
 
 @app.get("/nodes/register")
 def get_peers():
-    return {"nodes": list(PEERS)}
+    return {"nodes": list(PEERS), "total_peers": len(PEERS)}
+
+@app.get("/nodes/status")
+def get_node_status():
+    """Get detailed node status including peers and blockchain info"""
+    return {
+        "node_id": NODE_ID,
+        "peers": list(PEERS),
+        "total_peers": len(PEERS),
+        "blockchain_length": len(blockchain.chain),
+        "pending_transactions": len(blockchain.current_transactions),
+        "last_block_index": blockchain.last_block['index']
+    }
 
 @app.get("/nodes/synchronize")
 def synchronize():
