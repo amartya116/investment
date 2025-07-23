@@ -6,4 +6,4 @@ class DBConfig:
     port: int = 5432
     database: str = "stock_analysis"
     user: str = "postgres"
-    password: str = "amartya"  # Change this or use environment variables 
+    password: str = "password"  # Change this or use environment variables 
