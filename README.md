@@ -1,32 +1,31 @@
-# Investment
+This project implements a modular, event-driven trading architecture that simulates the core functionality of a decentralized exchange (DEX). At the center is a robust Matching Engine responsible for processing incoming user orders, matching buy/sell pairs, and generating trades. The system is built using FastAPI for API communication and SQLAlchemy for database interactions, with all confirmed trades stored in a PostgreSQL database for persistence and auditability.
+<img width="603" height="695" alt="image" src="https://github.com/user-attachments/assets/b603dd13-f9cf-4f64-9d45-19e5e334ea50" />
 
-Code related to the investment section of the website.
+🧩 System Architecture
+Once a user submits an order via the API, the Matching Engine handles the logic to determine if the order results in a trade. When a trade is successfully generated, it is broadcast to a network of distributed nodes (Node 1–4). Each node maintains a local copy of the ledger and is responsible for adding blocks containing the new trade data.
 
-See [market_sim](market_sim/README.md) for more details on the market simulation framework
+To ensure consistency across the network, the nodes implement a majority-voting consensus mechanism. When a new block is proposed, it must be accepted by more than 50% of the nodes to be considered valid. Once consensus is reached, the block is committed across all nodes, preserving the integrity and synchronization of the distributed ledger.
 
-## Usage
+Simultaneously, the finalized trade is saved to a centralized PostgreSQL database, enabling downstream analytics, reporting, and audit logging. This separation of execution logic (Matching Engine) and distributed ledger maintenance (Nodes) creates a scalable and fault-tolerant foundation for decentralized trade processing.
 
-```
-python3 test_db_operations.py
-```
+🛠️ Tech Stack
+FastAPI – RESTful APIs for user and node interaction
 
-## Market Dynamics and Trading Simulation
+SQLAlchemy – ORM for PostgreSQL-backed trade and order management
 
-Implements a framework for simulating, analyzing, and learning about financial markets, trading strategies, and blockchain integration.
+PostgreSQL – Centralized, durable storage for all trades
 
-Currently v0.
+Python – Core language for matching logic, node communication, and consensus
 
-## License
+Custom Consensus Protocol – Majority voting among distributed nodes
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+✅ Key Features
+Central Matching Engine with order book management
 
-The MIT License was chosen to:
-- Encourage wide adoption and collaboration
-- Allow commercial and academic use
-- Keep compliance simple
-- Protect contributors from liability
-- Maintain compatibility with most open-source projects
+Blockchain-inspired nodes with majority voting consensus
 
-## Notes
+Real-time trade generation and block broadcasting
 
-Project log reinitialized on 2025-01-19.
+Persistent trade storage using PostgreSQL
+
+Modular architecture ready for future integration with gRPC, Raft, or smart contracts
